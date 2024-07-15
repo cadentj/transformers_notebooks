@@ -1,10 +1,12 @@
 import torch
-from nnsight import LanguageModel
+from transformers import AutoModel, AutoConfig, AutoTokenizer
 import einops
 import matplotlib.pyplot as plt
 import torch.nn as nn
+from nnsight import LanguageModel
+from cogmodel import CogConfig, CogModelForHF
 
-MODEL = LanguageModel("gpt2", dispatch=True, device_map="auto")
+MODEL = LanguageModel("openai-community/gpt2", dispatch=True, device_map="auto")
 
 def get_split_l0_heads(head_idx=0):
     W_Q, W_K, _ = torch.split(MODEL.transformer.h[0].attn.c_attn.weight, 768, dim=1)
@@ -38,3 +40,12 @@ def get_pre_attn(
         pre_attn = l0_attn.input[0][0].save()
 
     return str_tokens, pre_attn[0]
+
+def load_cogmodel():
+    AutoConfig.register("custom_transformer", CogConfig)
+    AutoModel.register(CogConfig, CogModelForHF)
+    
+    config = AutoConfig.from_pretrained("kh4dien/cogmodel")
+    model = AutoModel.from_pretrained("kh4dien/cogmodel", config=config)
+    tokenizer = AutoTokenizer.from_pretrained("kh4dien/cogmodel")
+    return model, tokenizer
