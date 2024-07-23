@@ -13,22 +13,27 @@ jupyter:
 
 ```python id="eo1EwQhfQJ0S"
 import math
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchtyping import TensorType
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
+DEVICE = "cuda:0"
 ```
 
 # Transformers
 
-In 2017, Google Brain release a paper titled Attention is All you Need, where they departed from the traditional Seq2Seq architectures used in NLP and introduced a new kind of architecture: the transformer. As the title of their paper suggests, the transformer is based on attention mechanisms, and does not use any kind of recurrent states as in RNNs. This meant that a transformer could be trained significantly faster than a Seq2Seq model using RNNs, as sequences were no longer processed one token at a time, but rather all at once. It also significantly reduced the complexity of the models being worked with. As opposed to having complex Seq2Seq variations that can quickly become intractable, the transformer is composed of relatively straightforward matrix multiplications all the way through.
+In 2017, Google Brain released a paper titled *Attention is All you Need*, where they departed from the traditional Seq2Seq architectures used in NLP and introduced a new kind of architecture: the transformer. As the title of their paper suggests, the transformer is based on attention mechanisms, and does not use any kind of recurrent states as in RNNs. This meant that a transformer could be trained significantly faster than a Seq2Seq model using RNNs, as sequences were no longer processed one token at a time, but rather all at once. It also significantly reduced the complexity of the models being worked with. As opposed to having complex Seq2Seq variations that can quickly become intractable, the transformer is composed of relatively straightforward matrix multiplications all the way through.
 
 
-This notebook focuses on GPT-2 style transformers, introduced by OpenAI in their paper "Language Models are Unsupervised Multitask Learners". The original transformer architecture used an encoder-decoder structure for sequence to sequence tasks like translation. GPT-2 and most modern transformers use only the decoder component to excel at language modeling and text generation. In this first section, we'll focus on text generation at a high level.
+This notebook focuses on GPT-2 style transformers, introduced by OpenAI in their paper *Language Models are Unsupervised Multitask Learners*. The original transformer architecture used an encoder-decoder structure for sequence to sequence tasks like translation. GPT-2 and most modern transformers use only the decoder component to excel at language modeling and text generation. In this first section, we'll focus on text generation at a high level.
 
 
-Let's start with tokenization. A model's "vocabulary" isn't simply a list of words like we've done previously. Transformers use subword tokenization instead of full words. We can think of tokens as individual, meaninful components of language. Learning the atomic structure of language allows our model to generalize onto never-before-seen words and form more a nuanced representation of langauge.
+Let's start with tokenization. A model's "vocabulary" isn't simply a list of words like we've done previously. Transformers use subword tokenization instead of full words. We can think of tokens as individual, meaningful components of language, with parts like prefixes root words (or parts of root words), suffixes, and the like. Learning the atomic structure of language allows our model to generalize onto never-before-seen words and form more a nuanced representation of language.
 
 **How do we define tokens?**
 
@@ -50,7 +55,7 @@ We begin with the 256 ASCII characters as our tokens, and then find the most com
 "re"
 ```
 
-Note - you might see the character `Ġ` in front of some tokens. This is a special token that indicates that the token begins with a space. Tokens with a leading space vs not are different.
+Note - you might see the character `Ġ` in front of some tokens. This is a special token that indicates that the token begins with a space. Tokens with a leading space and those without a leading space are different.
 
 We'll use the `AutoModelForCausalLM` and `AutoTokenizer` libraries to load in a transformer model and its tokenizer from Huggingface. (Hugging Face is an open source ML platform for sharing pretrained models, datasets, and much more!)
 
@@ -88,16 +93,30 @@ There are a few funky and frustrating things about tokenization, which causes it
 Let's define a short method to convert lists of ids into tokens to get an idea of what's going on.
 
 ```python
-def to_str_tokens(string):
-    # <COGINST>
+def to_str_tokens(string: str) -> list[str]:
+    """
+    Turn a string into a list of tokens.
+
+    Args:
+        string (str): The string to tokenize.
+
+    Returns:
+        List[str]: A list of stringified tokens.
+    """
+
+    # The .encode method turns a string
+    # into a list of integer ids, .decode 
+    # does the opposite
     tokens = tokenizer.encode(string)
     
     str_tokens = []
     for token in tokens:
-        str_tokens.append(tokenizer.decode(token))
+
+        str_tokens.append(
+            tokenizer.decode(token)
+        )
 
     return str_tokens
-    # </COGINST>
 ```
 
 Whether a word begins with a capital or space matters!
@@ -128,7 +147,7 @@ To mark the beginning of a sequence, we'll use a (BOS) token.
 * It provides context that this is the start of a sequence, which can help the model generate more appropriate text.
 * It can act as a "rest position" for attention heads (more on this later, when we discuss attention).
 
-In GPT-2, the End of Sequence (EOS), Beginning of Sequence (BOS) and Padding (PAD) tokens are all the same, `<|endoftext|>` with index `50256`. This is because GPT-2 is an autoregressive model that only processes text left ot right, so it has no need to distingish between BOS and EOS tokens.
+In GPT-2, the End of Sequence (EOS), Beginning of Sequence (BOS) and Padding (PAD) tokens are all the same, `<|endoftext|>` with index `50256`. This is because GPT-2 is an autoregressive model that only processes text left ot right, so it has no need to distinguish between BOS and EOS tokens.
 
 #### **Step 1:** Convert text to tokens
 
@@ -166,10 +185,12 @@ probs = logits.softmax(dim=-1)
 print(probs.shape)
 ```
 
-#### **Bonus step:** What is the most likely next token at each position?
+#### **Step 3.5:** What is the most likely next token at each position?
 
 ```python
-most_likely_next_tokens = tokenizer.batch_decode(logits.argmax(dim=-1)[0])
+# Batch decode convert a list of lists of token ids into a list of strings by calling decode.
+top_token = probs.argmax(dim=-1)[0]
+most_likely_next_tokens = tokenizer.batch_decode(top_token)
 
 print(list(zip(to_str_tokens(reference_text), most_likely_next_tokens)))
 ```
@@ -179,9 +200,14 @@ We can see that, in a few cases (particularly near the end of the sequence), the
 #### **Step 4:** Map distribution to a token
 
 ```python
-next_token = logits[0, -1].argmax(dim=-1)
+# Index to the last token position of the softmaxed logits.
+# Then take the argmax along the last dimension.
+next_token = probs[0, -1].argmax(dim=-1)
+
+# Decode the most probable token into a string.
 next_char = tokenizer.decode(next_token)
-print(repr(next_char))
+
+print(f"'{next_char}'")
 ```
 
 Note that we're indexing `logits[0, -1]`. This is because logits have shape `[1, sequence_length, vocab_size]`, so this indexing returns the vector of length `vocab_size` representing the model's prediction for what token follows the **last** token in the input sequence.
@@ -193,18 +219,59 @@ In this case, we can see that the model predicts the token `' I'`.
 There are more efficient ways to do this (e.g. where we cache some of the values each time we run our input, so we don't have to do as much calculation each time we generate a new value), but this doesn't matter conceptually right now.
 
 ```python
-print(f"Sequence so far: {tokenizer.batch_decode(tokens)[0]!r}")
+print(f"Sequence so far: {tokenizer.batch_decode(tokens)[0]}")
 
-for i in range(10):
-    print(f"{tokens.shape[-1]+1}th char = {next_char!r}")
-    # Define new input sequence, by appending the previously generated token
-    tokens = torch.cat([tokens, next_token[None, None]], dim=-1)
-    # Pass our new sequence through the model, to get new output
-    logits = model(tokens).logits
-    # Get the predicted token at the end of our sequence
-    next_token = logits[0, -1].argmax(dim=-1)
-    # Decode and print the result
-    next_char = tokenizer.decode(next_token)
+def generate(
+    tokens: TensorType["batch", "sequence"],
+    running_token: TensorType["seq"],
+    n_tokens: int = 10
+) -> TensorType["batch", "sequence"]:
+    """
+    Generate a sequence of n_tokens by appending tokens to the input sequence.
+
+    Args:
+        tokens (Tensor): The input sequence.
+        running_token (Tensor): The running token.
+        n_tokens (int): The number of tokens to generate.
+
+    Returns:
+        (Tensor): The generated sequence.
+    """
+
+    # We want to iteratively generate the next token and append it to the running sequence. 
+
+    for _ in range(n_tokens):
+        
+        # Define new input sequence, by appending the previously generated token
+        # You can use [None, None] to add two new dimensions to the tensor. 
+        # This is equivalent to unsqueeze(0).unsqueeze(0), and it makes 
+        # the 0d running compatible with the running sequence of tokens shape (batch, seq)
+        
+        # <COGINST>
+        tokens = torch.cat([tokens, running_token[None, None]], dim=-1)
+        # </COGINST>
+
+        # Pass our new sequence through the model, to get new output
+        # Get the predicted token at the end of our sequence by taking
+        # the most probable token from the last position of the logits.
+
+        # Logits will be shape (batch, seq, vocab_size)
+        # The argmax should be taken over the last dimension of the last token
+        # e.g. tensor[:,-1,:]
+
+        # <COGINST>
+        logits = model(tokens).logits
+        running_token = logits[0, -1].argmax(dim=-1)
+        # </COGINST>
+
+        # Decode and print the result
+        next_char = tokenizer.decode(running_token)
+
+        print(f"{tokens.shape[-1]}th char = {next_char}")
+
+    return tokens
+
+_ = generate(tokens, next_token, 10)
 ```
 
 Now that we have a high level understanding of transformer behavior, let's build one from scratch to understand the role of each component!
@@ -227,7 +294,7 @@ The residual stream is *really* fundamental. It's the central object of the tran
 Then we have a series of `n_layers`, each consisting of an attention and mlp component. In this notebook, we'll construct an attention only transformer.
 <!-- #endregion -->
 
-Image
+Image - TODO?
 
 
 ## Attention
@@ -306,42 +373,101 @@ The $(i, j)^\text{th}$ element in the attention pattern is a probability weighti
 Let's compute some attention scores to get a feel for whats going on. Write the function `compute_attn_pattern` which accepts a weight matrices $W_Q$ and $W_K$, an input $x$, and an attention mask, then returns an attention pattern.
 
 ```python
-def get_mask(size):
+def get_mask(size: int) -> TensorType["size", "size"]:
+    """
+    Return an upper triangular mask of (size, size).
+
+    Args:
+        size (int): The size of the mask.
+    """
+
+    # Create a Tensor of ones shape (size, size).
+    # Make it a 'mask' by setting the dtype to torch.bool.
+    # This allows us to use it as a mask: 
+    # e.g. tensor[mask]
+    # which only returns the elements of tensor where mask is True.
+
     # <COGINST>
-    ones_like = torch.ones(size, size, dtype=torch.bool, device="cuda:0")
-    return torch.triu(ones_like).T
+    ones_like = torch.ones(
+        size, 
+        size, 
+        dtype=torch.bool, 
+        device=DEVICE
+    )
+    # </COGINST>
+    
+    # Create an upper triangular mask by taking the transpose of the lower triangular mask.
+
+    # <COGINST>
+    mask = torch.triu(ones_like).T
     # </COGINST>
 
-def compute_attn_pattern(
-    W_Q,
-    W_K,
-    x,
-    mask=None
-):  
+    return mask
+
+def compute_attn_weights(
+    W_Q: TensorType["d_model", "d_head"],
+    W_K: TensorType["d_model", "d_head"],
+    x: TensorType["seq", "d_model"],
+    mask: Optional[TensorType["d_head", "d_head"]] = None
+) -> TensorType["seq", "seq"]:  
+    """
+    Compute the masked attention pattern between W_Q and W_K
+    for a given input tensor x.
+
+    Args:
+        W_Q (Tensor): The query weight matrix.
+        W_K (Tensor): The key weight matrix.
+        x (Tensor): The input tensor.
+        mask (Tensor, optional): The mask to apply to the attention pattern.
+    
+    Returns:
+        A: The attention pattern.
+    """
+
+    # Compute Q, K using W_Q, W_K
+    # The matrices Q, K will be shape (seq, d_head)
+
     # <COGINST>
     Q = x @ W_Q 
     K = x @ W_K
+    # </COGINST>
 
+    # Then, compute the attention scores A, QK^T
+    # A will be shape (seq, seq). 
+
+    # Scale the attention scores by 1/sqrt(d_head) to push the dot product into a reasonable range for softmax.
+    # During training, if the dot products are too large, the softmax will saturate (all values will be close to 0 or 1) 
+    # and the gradients will be very small, making learning difficult.
+
+    # <COGINST>
     A = Q @ K.transpose(-2, -1)
+    # </COGINST>
 
-    A = A / 64 ** 0.5
+    # Apply the mask to A. One helpful Torch function here
+    # is torch.masked_fill(mask, value), which will replace all values in A
+    # where mask is 'True' with a value.
 
     if mask is not None:
         A = A.masked_fill(mask == 0, -1e9)
-    A = F.softmax(A, dim=-1)
-    return A
+
+    # Finally, apply the softmax function to A, and return the result.
+    # Applying the softmax computes the attention weights from the attention scores
+    # where each element (i,j) is a probability weighing how much information to copy between i and j
+
+    # <COGINST>
+    A = F.softmax(A, dim = -1)
     # </COGINST>
+    
+    return A
 ```
 
 `utils.py` provides a couple functions to load in weights and activations from a pretrained model, GPT-2.
 
 `get_split_l0_heads()`
-- Loads and splits $W_Q, W_K, W_V$ in layer 0. Transformers in practice typically have their heads concatenated for more efficient computation. 
-- The GPT2 implmentation from Hugging Face has $W_Q, W_K, W_V$ combined into a single weight matrix shape `[d_model, (d_model * 3)]`. 
-- We split the weight matrix into $W_Q, W_K, W_V$, then split those matrices further into `[d_model, n_heads, d_head]`.
+- This function loads and splits the weights $W_Q, W_K, W_V$ in layer 0. Transformers in practice typically have their heads concatenated for more efficient computation. The GPT-2 implementation from Hugging Face has $W_Q, W_K, W_V$ combined into a single weight matrix shape `[d_model, (d_model * 3)]`. We split that weight matrix into $W_Q, W_K, W_V$, then split those matrices further into `[d_model, n_heads, d_head]`.
 
 `get_pre_attn()`
-- Accepts a prompt and returns the hidden state before attention in the 0th layer.
+- This function accepts a prompt and returns the hidden state before attention in the 0th layer. This is our input `x`.
 
 ### A note on multi headed attention
 
@@ -355,28 +481,58 @@ Attention can easily scale to using multiple heads. In multi headed attention, t
 from utils import get_pre_attn, get_split_l0_heads
 import circuitsvis as cv
 
-def visualize_all_heads(prompt, n_heads):
+def visualize_all_heads(prompt: str, n_heads: int) -> None:
+
+    """
+    Visualize the attention patterns for all heads in the model for a given prompt.
+
+    Args:
+        prompt (str): The input prompt.
+        n_heads (int): The number of heads to visualize.
+
+    Returns:
+        None
+    """
+
+    # Begin by loading in the string tokens and pre-attention weights with `get_pre_attn`.
+
     # <COGINST>
     string_tokens, pre_attn = get_pre_attn(prompt=prompt)
+    # </COGINST>
 
     heads = []
 
     for head in range(n_heads):
+
+        # Get the weight matrices for the query and key for the head.
+        # These will be shape (d_model, d_head).
+
+        # <COGINST>
         W_Q, W_K = get_split_l0_heads(head_idx=head)
+        # </COGINST>
 
+        # Compute the attention mask for the sequence length.
+
+        # <COGINST>
         mask = get_mask(len(string_tokens))
+        # </COGINST>
 
-        A = compute_attn_pattern(W_Q, W_K, pre_attn, mask=mask)
+        # Compute the attention weights for the head and append to the list of heads.
+
+        # <COGINST>
+        A = compute_attn_weights(W_Q, W_K, pre_attn, mask=mask)
 
         heads.append(A)
+        # </COGINST>
 
     heads = torch.stack(heads, dim=0)
-    # </COGINST>
 
+    # CircuitsVis is a helpful library for visualizing Transformer related things.
+    
     display(
         cv.attention.attention_patterns(
-            tokens=string_tokens, 
-            attention=heads
+            tokens = string_tokens, 
+            attention = heads
         )
     )
 
@@ -384,8 +540,8 @@ prompt = "When Mary and John went to the store, John gave a drink to"
 n_heads = 12
 
 visualize_all_heads(
-    prompt=prompt,
-    n_heads=n_heads
+    prompt = prompt,
+    n_heads = n_heads
 )
 ```
 
@@ -395,7 +551,7 @@ We notice that there are three basic patterns which repeat quite frequently:
 * `current_token_heads`, which attend mainly to the current token (e.g. head `0.1`)
 * `first_token_heads`, which attend mainly to the first token (e.g. heads `0.0`, although these are a bit less clear-cut than the other two)
 
-The `prev_token_heads` and `current_token_heads` are perhaps unsurprising, because words that are close together in a sequence probably have a lot more mutual information (i.e. we could get quite far using bigram or trigram prediction).
+The `prev_token_heads` and `current_token_heads` are perhaps unsurprising, because words that are close together in a sequence probably have a lot more mutual information than words that are far apart (i.e. we could get quite far using bigram or trigram prediction).
 
 The `first_token_heads` are a bit more surprising. The basic intuition here is that the first token in a sequence is often used as a resting or null position for heads that only sometimes activate (since our attention probabilities always have to add up to 1).
 
@@ -447,50 +603,75 @@ Most of what we wrote before can be repurposed into the forward method of our Si
 
 ```python id="sgqYZmyO-muh"
 class SingleHeadAttention(nn.Module):
-    def __init__(self, d):
+    def __init__(self, d_model: int):
         """
         Here we will assume that the input dimensions are same as the
         output dims.
         """
         super().__init__()
+
+        # Create Q, K, V weight matrices for the attention head.
+
         # <COGINST>
-        self.q_layer = torch.nn.Linear(d, d)
-        self.k_layer = torch.nn.Linear(d, d)
-        self.v_layer = torch.nn.Linear(d, d)
+        self.q_layer = torch.nn.Linear(d_model, d_model)
+        self.k_layer = torch.nn.Linear(d_model, d_model)
+        self.v_layer = torch.nn.Linear(d_model, d_model)
         # </COGINST>
 
-    def forward(self, x, mask=None, return_weights=False):
+    def forward(
+        self,
+        x: TensorType["seq", "d_model"], 
+        mask: TensorType["seq", "seq"] = None, 
+        return_weights: bool = False
+    ) -> TensorType["seq", "d_model"]:
         """
-        Assume x is <t x d> -- t being the sequence length, d
-        the embed dims.
-
-        W_q, W_k, and W_v are weights for projecting into queries,
+        Assume x is shape (seq, d_model)
+        
+        W_Q, W_K, and W_V are weights for projecting into queries,
         keys, and values, respectively. Here these will have shape
-        <d x t>, yielding d dimensional vectors for each input.
+        (d_model, d_head), yielding d dimensional vectors for each input.
 
-        This function should return a t dimensional attention vector
-        for each input -- i.e., an attention matrix with shape <t x t>,
-        and the values derived from this <t x d>.
+        This function should return a (seq) dimensional attention weight
+        for each input -- i.e., an attention matrix with shape (seq, seq).
 
         Derive Q, K, V matrices, then self attention weights. These should
-        be used to compute the final representations (t x d); optionally
+        be used to compute the final representations (seq, d_model); optionally
         return the weights matrix if `return_weights=True`.
+
+        Args:
+            x (Tensor): The input tensor.
+            mask (Tensor): The mask tensor.
+            return_weights (bool): Whether to return the attention weights.
         """
+        
+        # Compute the attention scores for the input tensor x. 
+        
         # <COGINST>
         Q = self.q_layer(x)
         K = self.k_layer(x)
         V = self.v_layer(x)
 
         A = Q @ K.transpose(-2, -1)
+
         if mask is not None:
             A = A.masked_fill(mask == 0, -1e9)
+            
         weights = F.softmax(A, dim=-1)
+        # </COGINST>
 
+        # Compute the output by multiplying the attention weights by the value matrix V.
+        # Include a check to return the weights if `return_weights=True`.
+
+        # <COGINST>
         if return_weights:
           return weights, weights @ V
 
-        return weights @ V
+        out = weights @ V
         # </COGINST>
+
+        return out
+        
+
 ```
 
 ## Layer Norm
@@ -509,42 +690,58 @@ y = \frac{x - \mathbb{E}[x]}{\sqrt{\mathrm{Var}[x] + \epsilon}} \cdot \gamma + \
 Some helpful functions might be [`.mean()`](https://pytorch.org/docs/stable/generated/torch.mean.html) and [`.var()`](https://pytorch.org/docs/stable/generated/torch.var.html).
 
 ```python
-import torch
-import torch.nn as nn
-
 class LayerNorm(nn.Module):
-    def __init__(self, d_model, eps=1e-6):
+
+    def __init__(self, d_model: int, eps=1e-6):
         super().__init__()
+        
+        # Create attributes for .eps, .w, and .b.
+        # These correspond to the epsilon value for numerical stability,
+        # the weight vector, and the bias vector, respectively.
+
+        # Use nn.Parameter to ensure that these are trainable parameters.
+
         # <COGINST>
         self.eps = eps
+
         self.w = nn.Parameter(torch.ones(d_model))
         self.b = nn.Parameter(torch.zeros(d_model))
         # </COGINST>
 
-    def forward(self, residual):
+    def forward(
+        self, 
+        residual: TensorType["seq", "d_model"]
+    ) -> TensorType["seq", "d_model"]:
+        
+        # Compute the mean and standard deviation of the residual tensor.
+        # Use .mean and .std along the d_model dimension.
+
         # <COGINST>
         residual_mean = residual.mean(dim=-1, keepdim=True)
         residual_std = (residual.var(dim=-1, keepdim=True, unbiased=False) + self.eps).sqrt()
-
-        residual = (residual - residual_mean) / residual_std
-        return residual * self.w + self.b
         # </COGINST>
+
+        # Normalize the residual tensor using the mean and standard deviation.
+        # Then apply the learned weight and bias.
+
+        # <COGINST>
+        residual = (residual - residual_mean) / residual_std
+        residual = residual * self.w + self.b
+        # </COGINST>
+
+        return residual
 ```
 
-Let's test out LayerNorm to see if its doing the normalization we want. Create a random input tensor shape `[batch_size, seq_length, d_model]`. Instantiate a LayerNorm object and normalize the tensor. Then, calculate the mean and std of the output to pass the tests.
+Let's test out LayerNorm to see if its doing the normalization we want. Create a random input tensor shape `[batch_size, seq_length, d_model]`. Instantiate a LayerNorm object and normalize the tensor.
 
 ```python
 # Create input data
-# <COGINST>
 batch_size, d_model = 1000, 64
-input_data = torch.randn(batch_size, d_model) * 5 + 2  # Mean = 2, Std = 5
-# </COGINST>
+input_data = torch.randn(batch_size, d_model) * 5 + 2
 
 # Initialize and apply LayerNorm
-# <COGINST>
 layer_norm = LayerNorm(d_model)
 output_data = layer_norm(input_data)
-# </COGINST>
 
 def plot_distribution(ax, data, title):
     ax.hist(data.flatten().detach().numpy(), bins=50, density=True)
@@ -559,33 +756,53 @@ plot_distribution(ax1, input_data, "Input Data Distribution")
 plot_distribution(ax2, output_data, "Output Data Distribution after LayerNorm")
 ```
 
-Let's bundle everything together into a simple transformer layer. Self attention refers to the fact that our input sequence `src` attends to itself via attention!
+Let's bundle everything together into a simple transformer layer. Self-attention refers to the fact that our input sequence `src` attends to itself via attention!
 
 ```python
 class SelfAttentionLayer(nn.Module):
-    def __init__(self, embed_dim):
+    def __init__(self, embed_dim: int):
         super(SelfAttentionLayer, self).__init__()
+
+        # The self-attention layer should contain a SingleHeadAttention module
+        # followed by a LayerNorm module.
+
         # <COGINST>
         self.self_attn = SingleHeadAttention(embed_dim)
         self.norm1 = LayerNorm(embed_dim)
         # </COGINST>
 
-    def forward(self, src, mask=None):
-        # <COGINST>
-        src = src + self.norm1(self.self_attn(src, mask=mask))
+    def forward(
+        self, 
+        src: TensorType["seq", "d_model"], 
+        mask: TensorType["seq", "seq"] = None
+    ):
+        """
+        Args:
+            src (Tensor): The input tensor.
+            mask (Tensor): The mask tensor.
+        
+        Returns:
+            Tensor: The output tensor.
+        """
+
+        # Simply pass the input through the SingleHeadAttention layer,
+        # followed by a LayerNorm module.
+        src = src + self.norm1(
+            self.self_attn(src, mask=mask)
+        )
+
         return src
-        # </COGINST>
 ```
 
 ## Positional Encoding
 
 
-Attention operates over all pairs of positions. This means it's symmetric with regards to position - the attention calculation from token 5 to token 1 and token 5 to token 2 are the same by default. We don't want this - nearby tokens should be more relevant. 
+Attention operates over all pairs of positions. This means it's invariant with regards to position - the attention calculation from token 5 to token 1 and token 5 to token 2 are the same by default. We don't want this - nearby tokens should be more relevant. 
 
 `PositionalEncoding` class is a crucial component in transformer-based models. It adds positional information to input embeddings, allowing the model to understand the sequence order of inputs.
 
 
-Our implementation of  `PositionalEncoding` class uses sine and cosine functions of different frequencies to generate unique positional embeddings for each position in the input sequence. These embeddings are then added to the input embeddings to provide positional context.
+We want to insert some unique positional information. Our implementation of  `PositionalEncoding` class uses sine and cosine functions of different frequencies to generate these unique positional embeddings for each position in the input sequence. These embeddings are then added to the input embeddings to provide positional context.
 
 The encoding for a position `pos` and dimension `i` is given by:
 
@@ -599,15 +816,44 @@ where $d_{model}$ is the dimensionality of the model.
 
 
 ```python
-def positional_encoding(position, d_model):
+def positional_encoding(position: TensorType["seq"], d_model: int) -> TensorType["seq", "d_model"]:
+    """
+    Generate positional encoding for the input sequence.
+
+    Positional encoding is used in transformer models to provide the model with 
+    information about the relative or absolute position of the tokens in the sequence.
+
+    Args:
+        position (Tensor): Tensor representing the position of the tokens in the sequence.
+        d_model (int): The dimension of the encoding vector.
+
+    Returns:
+        (Tensor): A tensor of shape (N, d_model) containing the positional encodings.
+    """ 
+
+    # Initialize a position tensor shape (seq, d_model) with zeros.
+    # Create a tensor of positions (0, 1, 2, ..., N-1) and reshape it to (N, 1)
+
     # <COGINST>
     pe = torch.zeros(position.size(0), d_model)
     position = torch.arange(0, position.size(0), dtype=torch.float).unsqueeze(1)
+    # </COGINST>
+
+    # Compute the scaling term for the sine and cosine functions.
+
+    # <COGINST>
     div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(100.0) / d_model))
+    # </COGINST>
+
+    # Set every even index to sin and every odd index to cos.
+    # Slicing may be helpful here.
+
+    # <COGINST>
     pe[:, 0::2] = torch.sin(position * div_term)
     pe[:, 1::2] = torch.cos(position * div_term)
-    return pe
     # </COGINST>
+    
+    return pe
 
 # Plot for positions 0-99 and dimensions 0, 1, 2, 3
 positions = torch.arange(100).float()
@@ -618,7 +864,9 @@ We can plot the sine and cosine functions for different dimensions.
 
 ```python
 plt.figure(figsize=(12, 6))
+
 pe = positional_encoding(positions, d_model)
+
 for i in [0,100,200]:
     plt.plot(positions.numpy(), pe[:, i].numpy(), label=f'Dimension {i}')
 
@@ -651,22 +899,41 @@ Now, integrate your positional encoding into the module PositionalEncoding. It s
 
 ```python
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
+
+    def __init__(self, d_model: int, max_len=5000):
         super(PositionalEncoding, self).__init__()
+
+        # Create a positional encoding matrix of shape (max_len, d_model)
+        # Then create a position tensor of shape (max_len, 1)
+
         # <COGINST>
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        # </COGINST>
+
+        # Finally compute the scaling term for the sine and cosine functions.
+        # Set every even index to sin and every odd index to cos.
+        # Slicing may be helpful here.
+
+        # <COGINST>
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(100.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
         # </COGINST>
 
-    def forward(self, x):
+        # Register the positional encoding as a buffer.
+        # A buffer is a tensor that is not considered a model parameter.
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: TensorType["seq", "d_model"]) -> TensorType["seq", "d_model"]:
+        # Add the positional encoding to the input tensor.
+
         # <COGINST>
-        return x + self.pe[:x.size(0), :]
+        x = x + self.pe[:x.size(0), :]
         # </COGINST>
+
+        return x
 ```
 
 <!-- #region id="vuRuwq1Q_Z4x" -->
@@ -674,33 +941,21 @@ class PositionalEncoding(nn.Module):
 
 The provided code demonstrates how the key components we've discussed - positional encoding, layer normalization, and self-attention layers - come together to form a basic transformer model. Let's break down the `TransformerModel` class:
 
-1. **Initialization (`__init__`)**:
-   - `self.embed`: An embedding layer that converts input tokens to dense vectors.
-   - `self.pos_encoder`: Adds positional information to the embedded tokens.
-   - `self.layers`: A list of `SelfAttentionLayer` modules, forming the core of the transformer.
-   - `self.norm`: A final layer normalization applied after all attention layers.
-   - `self.decoder`: A linear layer that projects the final representations to vocabulary-sized logits.
 
-2. **Forward Pass (`forward`)**:
-   - Creates an attention mask to ensure the model only attends to previous tokens (for causal/autoregressive modeling).
-   - Embeds the input tokens and adds positional encodings.
-   - Passes the embeddings through each self-attention layer sequentially.
-   - Applies a final layer normalization.
-   - Projects the output to vocabulary-sized logits using the decoder.
-
-This implementation showcases how:
-- Positional encodings are added to token embeddings at the start.
-- Multiple self-attention layers are stacked to process the input deeply.
-- Layer normalization is applied both within the attention layers (not shown here, but typically part of `SelfAttentionLayer`) and at the end of the entire stack.
-- The model maintains the same dimensionality (`embed_dim`) throughout, using residual connections (likely within `SelfAttentionLayer`) to facilitate gradient flow.
-
-This structure allows the transformer to effectively process sequential data while maintaining awareness of token positions and leveraging the power of self-attention mechanisms.
+- `self.embed`: An embedding layer that converts input tokens to dense vectors.
+- `self.pos_encoder`: Adds positional information to the embedded tokens.
+- `self.layers`: A list of `SelfAttentionLayer` modules, forming the core of the transformer.
+- `self.norm`: A final layer normalization applied after all attention layers.
+- `self.decoder`: A linear layer that projects the final representations to vocabulary-sized logits.
 <!-- #endregion -->
 
 ```python id="xEbCUxGivkmA"
 class CogModel(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_layers):
+    def __init__(self, vocab_size: int, embed_dim: int, num_layers: int):
         super(CogModel, self).__init__()
+
+        # Create an embedding layer, positional encoding, and a list of self-attention layers.
+
         # <COGINST>
         self.embed = nn.Embedding(vocab_size, embed_dim)
         self.pos_encoder = PositionalEncoding(embed_dim)
@@ -709,18 +964,51 @@ class CogModel(nn.Module):
         self.decoder = nn.Linear(embed_dim, vocab_size)
         # </COGINST>
 
-    def forward(self, src):
+    def forward(
+        self, 
+        src: TensorType["batch", "seq"]
+    ) -> TensorType["batch", "seq", "vocab_size"]:
+        
+        """
+        Positional encodings are added to token embeddings at the start.
+        Multiple self-attention layers are stacked to process the input deeply.
+        Layer normalization is applied both within the attention layers and at the end of the entire stack.
+        The model maintains the same dimensionality (embed_dim) throughout, 
+        using residual connections (likely within SelfAttentionLayer) to facilitate gradient flow.
+
+        Args:
+            src (Tensor): The input tensor.
+
+        Returns:
+            (Tensor): The output tensor
+        """
+
+        # Create an attention mask to ensure the model only attends to previous tokens (for causal/autoregressive modeling).
+        
         # <COGINST>
         mask = torch.triu(torch.ones(
-            src.size(1), src.size(1), dtype=torch.bool, device=src.device)).T
-        src = self.embed(src)
+        src.size(1), src.size(1), dtype=torch.bool, device=src.device)).T
+        # </COGINST>
+
+        # Embed the input tokens and add positional encodings.
+        # Pass the embeddings through each self-attention layer sequentially.
+
+        # <COGINST>
+        src = self.embed(src)  
         src = self.pos_encoder(src)
         for layer in self.layers:
             src = layer(src, mask)
+        # </COGINST>
+
+        # Apply a final layer normalization.
+        # Project the output to vocabulary-sized logits using the decoder.
+
+        # <COGINST>
         src = self.norm(src)
         output = self.decoder(src)
-        return output
         # </COGINST>
+
+        return output
 
 ```
 
@@ -737,21 +1025,53 @@ You can call "echo" following a word to have the model repeat the word, or "uppe
 Let's play around with the model! Write a generate text method to play around with the model's outputs. Note that the model isn't perfect at performing the sequence tasks it was trained on - if you want, go check out the notebook today's exercises were based on to see if you can do better!
 
 ```python
-def generate_text(prompt, max_len=28):
+def generate_text(prompt: str, max_len: int = 28) -> str: 
+    """
+    Generate text from a prompt using the CogModel.
+    
+    Args:
+        prompt (str): The input prompt.
+        max_len (int): The maximum length of the generated text.
+    
+    Returns:
+        (str): The generated text.
+    """
+
+    
+    # Use the tokenizer (just like before) to encode a prompt into a Tensor of token ids.
+
     # <COGINST>
     prompt_tensor = tokenizer.encode(prompt, return_tensors="pt")
-
-    for _ in range(max_len):
-        output = model(prompt_tensor)
-        pred_token = output.argmax(dim=2)[:,-1]
-        if pred_token == 0:
-            break
-        prompt_tensor = torch.cat((prompt_tensor, pred_token.unsqueeze(0)), dim=1)
-
-    predicted_sentence = "".join(tokenizer.batch_decode(prompt_tensor[0]))
-    return predicted_sentence
     # </COGINST>
 
-result = generate_text('minecraft echo mine up upper')
-result
+    # For a maximum length of tokens, generate the next token by passing the prompt tensor through the model.
+    for _ in range(max_len):
+
+        # Pass the prompt tensor through the model to get the output logits. 
+        # If the predicted token is a 0, or padding token, break the loop.
+        # Finally, concatenate the predicted token to the prompt tensor.
+
+        # <COGINST>
+        output = model(prompt_tensor)
+        pred_token = output.argmax(dim=2)[:,-1]
+
+        if pred_token == 0:
+            break
+        # </COGINST>
+        
+        prompt_tensor = torch.cat((prompt_tensor, pred_token.unsqueeze(0)), dim=1)
+
+    # Decode the token ids into a string and return the result.
+
+    # <COGINST>
+    predicted_sentence = "".join(tokenizer.batch_decode(prompt_tensor[0]))
+    # </COGINST>
+
+    return predicted_sentence
+
+result = generate_text('minecraft echo')
+print(result)
+
+result = generate_text('minecraft upper')
+print(result)
 ```
